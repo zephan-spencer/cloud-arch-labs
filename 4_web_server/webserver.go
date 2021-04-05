@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"strconv"
+	"sync"
 )
 
 func main() {
-	db := database{"shoes": 50, "socks": 5}
+	db := database{data: map[string]dollars{"shoes": 50, "socks": 5}}
+
 	http.HandleFunc("/create", db.create)
 	http.HandleFunc("/read", db.read)
 	http.HandleFunc("/update", db.update)
@@ -21,34 +22,29 @@ type dollars float32
 
 func (d dollars) String() string { return fmt.Sprintf("$%.2f", d) }
 
-type database map[string]dollars
+type database struct {
+	data map[string]dollars
+	sync.RWMutex
+}
 
 func (db database) create(w http.ResponseWriter, req *http.Request) {
-	item := req.URL.Query().Get("item")
-	parsedString := strings.SplitN(item, ",", 2)
+	item := req.URL.Query()
 
-	name := ""
+	name := item.Get("name") 
+	price, err := strconv.ParseFloat(item.Get("price"), 32)
 
-	var price float32
-
-	for index, element := range parsedString {
-		if index == 0 {
-			name = element
-		} else {
-			tempPrice, err := strconv.ParseFloat(element, 32)
-			price = float32(tempPrice)
-			if err != nil {
-    			fmt.Fprintln(w, "Price provided is invalid, item will not be created")
-    			return
-			}
-		}
+	if err != nil {
+    	fmt.Fprintln(w, "Price provided is invalid, item will not be created")
+    	return
 	}
-	db[name] = dollars(price)
+	db.Lock()
+	db.data[name] = dollars(price)
+	db.Unlock()
 }
 
 func (db database) read(w http.ResponseWriter, req *http.Request) {
 	item := req.URL.Query().Get("item")
-	if price, ok := db[item]; ok {
+	if price, ok := db.data[item]; ok {
 		fmt.Fprintf(w, "%s\n", price)
 	} else {
 		w.WriteHeader(http.StatusNotFound) // 404
@@ -57,27 +53,19 @@ func (db database) read(w http.ResponseWriter, req *http.Request) {
 }
 
 func (db database) update(w http.ResponseWriter, req *http.Request) {
-	item := req.URL.Query().Get("item")
-	parsedString := strings.SplitN(item, ",", 2)
+	item := req.URL.Query()
+	name := item.Get("name")
+	price, err := strconv.ParseFloat(item.Get("price"), 32)
 
-	name := ""
-
-	var price float32
-
-	for index, element := range parsedString {
-		if index == 0 {
-			name = element
-		} else {
-			tempPrice, err := strconv.ParseFloat(element, 32)
-			price = float32(tempPrice)
-			if err != nil {
-    			fmt.Fprintln(w, "Price provided is invalid, item will not be created")
-    			return
-			}
-		}
+	if err != nil {
+    	fmt.Fprintln(w, "Price provided is invalid, item will not be updated")
+    	return
 	}
-	if _, ok := db[item]; ok {
-		db[name] = dollars(price)
+
+	if _, ok := db.data[name]; ok {
+		db.Lock()
+		db.data[name] = dollars(price)
+		db.Unlock()
 	} else {
 		w.WriteHeader(http.StatusNotFound) // 404
 		fmt.Fprintf(w, "no such item: %q\n", name)
@@ -86,7 +74,7 @@ func (db database) update(w http.ResponseWriter, req *http.Request) {
 
 func (db database) delete(w http.ResponseWriter, req *http.Request) {
 	item := req.URL.Query().Get("item")
-	if price, ok := db[item]; ok {
+	if price, ok := db.data[item]; ok {
 		fmt.Fprintf(w, "%s\n", price)
 	} else {
 		w.WriteHeader(http.StatusNotFound) // 404
